@@ -1,0 +1,48 @@
+#### This is a selection of useful functions for general use that dont fit in another category
+
+def is_it_a_bank_holiday_online(tday = datetime.today().strftime('%Y-%m-%d')):
+    '''
+    Checks UK gov website if a date is a Bank Holiday, 
+    format in strftime = %Y-%m-%d
+    '''
+
+    url = "https://www.gov.uk/bank-holidays.json"
+    r = requests.get(url)
+    d = r.json()
+    BHinfo = []
+    for country, data in d.items():
+        BH = pd.DataFrame(data['events'])
+        BH['Country'] = country
+        BHinfo.append(BH)
+    BHinfo = pd.concat(BHinfo, ignore_index=True)
+    BHinfo = BHinfo.loc[BHinfo['Country'] == 'england-and-wales']
+    BHlist = BHinfo['date'].tolist()
+    if tday in BHlist:
+        return True
+    else:
+        return False
+        
+        
+ def compare_file_sizes(file,folder_path):
+    '''
+    compare vs 9 most recent files, if 30% bigger or smaller flag for investigation
+    '''
+    is_there_a_variance = False #assume no variance
+
+    all_files = [x for x in listdir(folder_path) if city in x]
+    all_dates = [datetime.today() - timedelta(x) for x in range(10)]
+    
+    last_10_files = [x for x in all_files if x[-17:-8] in [y.strftime("%d%b%Y") for y in all_dates]]
+    today_file = [x for x in last_10_files if datetime.today().strftime("%d%b%Y") in x][0]
+    last_10_files.remove(today_file)
+    
+    today_file_size =  stat(f"{folder_path}\\{today_file}").st_size
+        
+    if last_10_files:
+        size_compar = today_file_size/(sum([stat(f"{folder_path}\\{x}").st_size for x in last_10_files])/len(last_10_files))
+        
+        if  1.3 < size_compar or  size_compar < 0.7:
+            print(f"The size of {today_file} is {size_compar} compared to the previous files")
+            is_there_a_variance = True
+    return is_there_a_variance
+    
