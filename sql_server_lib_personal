@@ -1,0 +1,135 @@
+### This is a sample library I had put together to interact with microsoft SQL server
+
+import sqlalchemy
+import pyodbc
+import urllib.parse
+
+def get_engine(user,pass):
+    '''Creates an sql alchemy engine that connects to the RMCC Server'''
+    login = urllib.parse.quote_plus(user)#cleanup bc it is sent in html format
+    passw = urllib.parse.quote_plus(pass)
+    alchstr = f"mssql+pyodbc://{login}:{passw}@Analytics/RMCCDev?driver=ODBC Driver 17 for SQL Server?"
+    engine = sqlalchemy.create_engine(alchstr,fast_executemany=True)
+    return engine
+
+def delete_dup_rows_in_server(table, columns_req = []):
+    '''Deletes duplicates from server tables,
+        The default option will check if it is a TOTAL or MCAT table and delete accordingly
+        Otherwise add the columns that will be the base for duplication
+        eg if the table is like so: 1nncode  date       Occ
+                                     AAAAA   20210101   0.9
+                                     AAAAA   20210101   0.8
+                                     AAAAA   20210101   0.9
+                                     AAAAA   20210102   0.4
+        if columns_req = ["inncode","date"] The second and third entry is deleted, as the combo (AAAAA   20210101) can only exist once
+        columns_req = ["inncode","date","Occ"] Only the third entry is deleted, as the combo (AAAAA   20210101   0.9) can only exit once
+         columns_req = ["inncode"] all entries but the first are deleted
+        '''
+    try:
+        if columns_req ==[]:
+            if "MCAT" in table:
+                columns_req = "Inncode,[Occ Date],MCAT"
+            else:
+                columns_req = "Inncode,[Occ Date]"
+            
+        connect_Execute(f"""WITH cte AS (
+        SELECT 
+            *, 
+            ROW_NUMBER() OVER (
+                PARTITION BY 
+                    {columns_req}
+                ORDER BY 
+                {columns_req}
+            ) row_num
+        FROM 
+            {table}
+        )
+        DELETE FROM cte
+        WHERE row_num > 1;""")
+    except:
+        print(f"Error, could not find {columns_req} in {table}, have the right column names been passed?")
+
+
+def connect_Execute(SQL_text,user = user, passw , expect_result = False): 
+    '''
+    Parameters
+    ----------
+    SQL_text : string
+        DESCRIPTION. Connect to SQL server and run SQL command
+    expect_result : if optional is True, expect a return 
+        DESCRIPTION. The default is False.
+
+    Returns
+    -------
+    results from SQL command
+    '''
+    con = pyodbc.connect(f"Driver={ODBC Driver 17 for SQL Server};Server=Analytics;Database=RMCCDev;Trusted_Connection=no;UID={user};PWD={passw};")
+    with con:
+        cursor = con.cursor()
+        if  isinstance(SQL_text,str):
+            cursor.execute(SQL_text)
+        else:
+            for command in SQL_text:
+                cursor.execute(command)
+        if expect_result:
+                return cursor.fetchall()
+
+
+
+
+
+def data_types_and_column_names(schema,table_name_no_schema):
+    '''Connects to the schema to get the column names and data types from the server, returns 2 lists of each'''
+        
+    SQL_Command =  """
+    select COLUMN_NAME, DATA_TYPE
+    from INFORMATION_SCHEMA.COLUMNS
+    where TABLE_NAME='{table_name_no_schema}' AND TABLE_SCHEMA = '{schema}'
+        """
+    info_list = connect_Execute(SQL_Command,True)
+    Column_names = [x[0] for x in info_list]
+    data_types = [x[1] for x in info_list]
+    
+    return Column_names,data_types
+
+def table_repartition(table):
+    '''Rebuild a tables partition and reindex it. To be used for big tables to make them easier to access faster'''
+    connect_Execute([f"ALTER TABLE {table} REBUILD PARTITION = ALL WITH (DATA_COMPRESSION = PAGE)",
+                    f"ALTER INDEX ALL ON {table}] REBUILD"])
+    
+def convert_data_SQL_to_df(data_types_dictionary):
+    '''Covert SQL server data types to pandas df types'''
+    for key, value in data_types_dictionary.items():
+        if value == 'bigint' or value == 'float' or value == 'decimal':
+            data_types_dictionary[key] = 'float64'
+        if value == 'bit':
+            data_types_dictionary[key] = 'boolean'
+        if value == 'char' or value == 'nchar' or 'varchar' in  value or value == 'uniqueidentifier' or value == 'object':
+            data_types_dictionary[key] = 'object'
+        if 'date' in value:
+            data_types_dictionary[key] = 'datetime64[ns]'
+        if value == 'int32' or value == 'smallint' or value == 'tinyint':
+            data_types_dictionary[key] = 'Int32'
+        if value == 'money':
+            data_types_dictionary[key] = 'string'
+    return data_types_dictionary
+
+def convert_data_df_to_SQLalch(data_types_dictionary):
+    '''Covert pandas df data types to  sql server data types'''
+    for key, value in data_types_dictionary.items():
+        if value == 'bigint' or value == 'float':
+            data_types_dictionary[key] = sqlalchemy.sql.sqltypes.Float
+        if value == 'bit':
+            data_types_dictionary[key] = sqlalchemy.sql.sqltypes.BOOLEAN
+        if value == 'char' or value == 'nchar' or  'varchar' in value or  value == 'uniqueidentifier' or   value == 'object':
+            data_types_dictionary[key] = sqlalchemy.sql.sqltypes.String
+        if 'date' in value:
+            data_types_dictionary[key] = sqlalchemy.sql.sqltypes.Date
+        if value == 'int32' or value == 'smallint' or value == 'tinyint':
+            data_types_dictionary[key] = sqlalchemy.sql.sqltypes.Integer
+        if value == 'money':
+            data_types_dictionary[key] = sqlalchemy.sql.sqltypes.String
+        if value == 'decimal':
+            data_types_dictionary[key] = sqlalchemy.sql.sqltypes.DECIMAL
+    return data_types_dictionary
+
